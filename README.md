@@ -135,5 +135,5 @@ lib/
 
 ```
 Copyright (c) 2024 share121
-Copyright (c) 2026 yinengbei
+Copyright (c) 2026 KawaYi
 ```
