@@ -9,7 +9,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/yinengbei/inter-knot/actions"><img src="https://img.shields.io/github/actions/workflow/status/yinengbei/inter-knot/gh_pages.yml?label=Web%20Build" alt="Web Build"></a>
   <a href="https://github.com/yinengbei/inter-knot/actions"><img src="https://img.shields.io/github/actions/workflow/status/yinengbei/inter-knot/android.yml?label=Android%20Build" alt="Android Build"></a>
   <img src="https://img.shields.io/badge/Flutter-3.x-blue?logo=flutter" alt="Flutter">
   <img src="https://img.shields.io/badge/Dart-≥3.4.4-0175C2?logo=dart" alt="Dart">
@@ -18,7 +17,7 @@
 
 本项目基于 [share121/inter-knot](https://github.com/share121/inter-knot) 二开，采用自建 Strapi 后端提供数据服务，支持 **Android / iOS** 平台。
 
-> ⚠️ **桌面端（Web / Windows / macOS / Linux）已停止维护，不再提供支持。**
+> ⚠️ **Web 端与桌面端（Windows / macOS / Linux）已停止维护，不再提供支持。**
 
 ---
 
@@ -53,7 +52,6 @@
 
 - Flutter SDK（stable channel）
 - Android Studio 或 VS Code
-- Chrome（用于 Web 调试）
 
 ### 2. 拉取代码
 
@@ -81,9 +79,6 @@ class ApiConfig {
 ### 5. 运行
 
 ```bash
-# Web
-flutter run -d chrome
-
 # Android
 flutter run -d android
 ```
@@ -112,7 +107,6 @@ lib/
 
 | 工作流 | 说明 |
 |--------|------|
-| `gh_pages.yml` | 推送 `main` 分支时自动构建 Web 并部署到 GitHub Pages |
 | `android.yml` | 打 tag 时构建 Android APK 并上传 Artifact |
 
 ---
