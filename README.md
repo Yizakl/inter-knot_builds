@@ -1,4 +1,4 @@
-# 绳网 (Inter-Knot)
+# 绳网 (InterKnot)
 
 <p align="center">
   <img src="icon.webp" alt="Inter-Knot Logo" width="120" />
@@ -19,9 +19,11 @@
 
 > ⚠️ **Web 端与桌面端（Windows / macOS / Linux）已停止维护，不再提供支持。**
 
+> 📱 Web端请前往 [KawaYiLab/InterKnot-Web](https://github.com/KawaYiLab/InterKnot-Web)
+
 ---
 
-## ✨ 功能亮点
+## ✨ 功能
 
 - **帖子系统** — 发帖、评论、回复，支持富文本 & Markdown
 - **用户体系** — 注册登录、等级经验、个人主页
