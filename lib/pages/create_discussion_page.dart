@@ -83,7 +83,9 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
   bool _hasUnsavedChanges = false;
   bool _suppressChangeTracking = false;
   bool _isDesktopEditorActive = true;
-  late final bool _draftFeaturesEnabled;
+  bool _draftFeaturesEnabled = true;
+  bool _isEditingPublished = false;
+  bool _isDiscardingChanges = false;
   String? _documentId;
   String? _selectedCategorySlug;
   String _lastSavedSnapshot = '';
@@ -138,6 +140,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
       !_isSavingDraft &&
       !_isPublishing &&
       !_isDeletingDraft &&
+      !_isDiscardingChanges &&
       !_isCoverUploading &&
       titleController.text.trim().isNotEmpty &&
       (_currentBodyText.trim().isNotEmpty || _uploadedImages.isNotEmpty);
@@ -209,10 +212,6 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
   }
 
   void _markDraftDirty({bool scheduleSave = true}) {
-    if (!_draftFeaturesEnabled) {
-      return;
-    }
-
     if (_suppressChangeTracking) {
       return;
     }
@@ -413,6 +412,11 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
 
     try {
       final nextDiscussion = await api.getMyDraftDetail(item.id);
+      _isEditingPublished = nextDiscussion.hasPublishedVersion;
+      _draftFeaturesEnabled = !_isEditingPublished;
+      if (_isEditingPublished && _selectedIndex == 2) {
+        _selectedIndex = 0;
+      }
       _applyDiscussionToEditor(nextDiscussion);
       if (mounted && _pageController.hasClients) {
         _pageController.jumpToPage(0);
@@ -840,10 +844,6 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
   }
 
   Future<void> _saveDraft({bool force = false}) async {
-    if (!_draftFeaturesEnabled && !force) {
-      return;
-    }
-
     final inFlight = _saveDraftFuture;
     if (inFlight != null) {
       await inFlight;
@@ -864,10 +864,6 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
   }
 
   Future<void> _performSaveDraft({bool force = false}) async {
-    if (!_draftFeaturesEnabled && !force) {
-      return;
-    }
-
     if (_isInitializingDraft) {
       return;
     }
@@ -888,7 +884,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
       throw Exception('无法关联作者，请重新登录后再试');
     }
 
-    if (_draftFeaturesEnabled && mounted) {
+    if (mounted) {
       setState(() {
         _isSavingDraft = true;
       });
@@ -957,7 +953,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
       _hasUnsavedChanges = true;
       rethrow;
     } finally {
-      if (_draftFeaturesEnabled && mounted) {
+      if (mounted) {
         setState(() {
           _isSavingDraft = false;
         });
@@ -1024,18 +1020,6 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
   }
 
   Future<void> _loadDraftIfNeeded() async {
-    if (!_draftFeaturesEnabled) {
-      return;
-    }
-
-    final shouldLoadDraft =
-        widget.documentId != null && widget.documentId!.isNotEmpty
-            ? widget.discussion == null || widget.discussion!.isEditableDraft
-            : (_activeDiscussion?.isEditableDraft ?? false);
-    if (!shouldLoadDraft) {
-      return;
-    }
-
     final draftId = widget.documentId ?? _activeDiscussion?.id;
     if (draftId == null || draftId.isEmpty) {
       return;
@@ -1049,6 +1033,16 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
 
     try {
       final loadedDiscussion = await api.getMyDraftDetail(draftId);
+      _isEditingPublished = loadedDiscussion.hasPublishedVersion;
+      _draftFeaturesEnabled = !_isEditingPublished;
+
+      if (_isEditingPublished && _selectedIndex == 2) {
+        _selectedIndex = 0;
+        if (_pageController.hasClients) {
+          _pageController.jumpToPage(0);
+        }
+      }
+
       if (widget.discussion != null && widget.discussion!.id == draftId) {
         widget.discussion!.updateFrom(loadedDiscussion);
         widget.discussion!.id = loadedDiscussion.id;
@@ -1058,7 +1052,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
       }
     } catch (e) {
       debugPrint('Load draft failed: $e');
-      if (_activeDiscussion == null && mounted) {
+      if (mounted) {
         showToast('加载草稿失败: $e', isError: true);
       }
     } finally {
@@ -1073,8 +1067,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
   Future<void> _handleClose() async {
     _autoSaveDebounce?.cancel();
 
-    if (_draftFeaturesEnabled &&
-        _hasUnsavedChanges &&
+    if (_hasUnsavedChanges &&
         (_documentId != null || _hasAnyDraftContent)) {
       try {
         await _saveDraft(force: true);
@@ -1105,6 +1098,14 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
       return;
     }
 
+    _autoSaveDebounce?.cancel();
+    final inFlight = _saveDraftFuture;
+    if (inFlight != null) {
+      try {
+        await inFlight;
+      } catch (_) {}
+    }
+
     if (mounted) {
       setState(() {
         _isDeletingDraft = true;
@@ -1117,7 +1118,6 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
         throw Exception(_extractResponseMessage(res));
       }
 
-      _autoSaveDebounce?.cancel();
       await _refreshDraftEntries(silent: true);
 
       if (!mounted) {
@@ -1139,6 +1139,63 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
     }
   }
 
+  Future<void> _discardChanges() async {
+    final documentId = _documentId;
+    if (documentId == null || documentId.isEmpty || !_isEditingPublished) {
+      return;
+    }
+
+    final confirmed = await showDeleteConfirmDialog(
+      context: context,
+      title: '放弃修改',
+      message: '确定放弃未发布的修改吗？内容将恢复为线上版本。',
+      confirmText: '放弃修改',
+      width: 300,
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+
+    _autoSaveDebounce?.cancel();
+    final inFlight = _saveDraftFuture;
+    if (inFlight != null) {
+      try {
+        await inFlight;
+      } catch (_) {}
+    }
+
+    if (mounted) {
+      setState(() {
+        _isDiscardingChanges = true;
+      });
+    }
+
+    try {
+      final res = await api.discardArticleDraft(documentId);
+      if (res.hasError) {
+        throw Exception(_extractResponseMessage(res));
+      }
+      final detail = await api.getMyDraftDetail(documentId);
+      _isEditingPublished = detail.hasPublishedVersion;
+      _draftFeaturesEnabled = !_isEditingPublished;
+      _applyDiscussionToEditor(detail);
+      _hasUnsavedChanges = false;
+      _syncSavedSnapshot();
+      showToast('已恢复为线上版本');
+    } catch (e) {
+      if (mounted) {
+        showToast('放弃修改失败: $e', isError: true);
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isDiscardingChanges = false;
+        });
+      }
+    }
+  }
+
   @override
   void dispose() {
     _autoSaveDebounce?.cancel();
@@ -1155,10 +1212,10 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
   @override
   void initState() {
     super.initState();
-    _draftFeaturesEnabled =
-        widget.discussion == null || widget.discussion!.isEditableDraft;
     _activeDiscussion = widget.discussion;
     _documentId = widget.documentId ?? _activeDiscussion?.id;
+    _isEditingPublished = _activeDiscussion?.hasPublishedVersion == true;
+    _draftFeaturesEnabled = !_isEditingPublished;
     titleController.addListener(_handleTitleChanged);
     _mobileBodyController.addListener(_handleMobileBodyChanged);
     _quillController.addListener(_handleQuillChanged);
@@ -1228,10 +1285,10 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
       }
 
       Get.back(result: true);
-      showToast('发布成功');
+      showToast(_isEditingPublished ? '更新成功' : '发布成功');
       c.refreshSearchData();
     } catch (e) {
-      showToast('发布失败: $e', isError: true);
+      showToast(_isEditingPublished ? '更新失败: $e' : '发布失败: $e', isError: true);
     } finally {
       if (mounted) {
         setState(() {
@@ -1252,6 +1309,8 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
       },
       showDeleteDraft: _supportsDeleteCurrentDraft,
       onDeleteDraft: _supportsDeleteCurrentDraft ? _deleteCurrentDraft : null,
+      showDiscard: _isEditingPublished,
+      onDiscard: _isEditingPublished ? _discardChanges : null,
     );
   }
 
@@ -1347,6 +1406,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
                   onSubmit: () => _publish(isMobile: true),
                   draftCount: _draftEntries.length,
                   showDraftButton: _draftFeaturesEnabled,
+                  isEditingPublished: _isEditingPublished,
                 ),
               ),
             ),
@@ -1356,7 +1416,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
             // Header
             CreateDiscussionHeader(
               controller: c,
-              title: '发布委托',
+              title: _isEditingPublished ? '编辑帖子' : '发布委托',
               onClose: _handleClose,
             ),
             // Body
@@ -1396,6 +1456,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
                                   isSavingDraft: _isSavingDraft,
                                   isPublishing: _isPublishing,
                                   isDeletingDraft: _isDeletingDraft,
+                                  isDiscardingChanges: _isDiscardingChanges,
                                   onSubmit: () => _publish(),
                                   submitEnabled: _canPublish,
                                   showCompressionToggle: _selectedIndex == 1,
@@ -1408,6 +1469,9 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
                                   showDeleteButton: _selectedIndex != 2 &&
                                       _supportsDeleteCurrentDraft,
                                   onDeleteDraft: _deleteCurrentDraft,
+                                  showDiscardButton: _isEditingPublished,
+                                  onDiscard: _discardChanges,
+                                  isEditingPublished: _isEditingPublished,
                                 ),
                             ],
                           ),
