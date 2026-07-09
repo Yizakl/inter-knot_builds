@@ -463,13 +463,20 @@ class Controller extends GetxController {
     }
   }
 
-  void markDiscussionReadAndViewed(DiscussionModel discussion) {
+  void markDiscussionReadAndViewed(
+    DiscussionModel discussion, {
+    int? serverViews,
+  }) {
     final id = discussion.id;
     if (id.isEmpty) return;
     discussion.isRead = true;
     _localReadCache[id] = true;
-    final nextViews = discussion.views + 1;
+
+    final nextViews = serverViews != null
+        ? (serverViews > discussion.views ? serverViews : discussion.views)
+        : discussion.views + 1;
     discussion.views = nextViews;
+
     final cachedViews = _localViewCache[id];
     if (cachedViews == null || nextViews > cachedViews) {
       _localViewCache[id] = nextViews;
@@ -477,6 +484,7 @@ class Controller extends GetxController {
     _persistLocalReadCache();
     _persistLocalViewCache();
     HDataModel.upsertCachedDiscussion(discussion);
+    HDataModel.updateCachedDiscussion(id, views: nextViews);
     searchResult.refresh();
     _interaction.bookmarks.refresh();
     history.refresh();

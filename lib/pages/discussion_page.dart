@@ -98,11 +98,24 @@ class _DiscussionPageState extends State<DiscussionPage> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final wasRead = widget.discussion.isRead;
+      // 先立即完成本地的已读 + 浏览量乐观更新，再异步同步服务端
       c.markDiscussionReadAndViewed(widget.discussion);
       if (!wasRead) {
         Get.find<Api>().markAsRead(widget.discussion.id);
       }
-      Get.find<Api>().viewArticle(widget.discussion.id);
+      Get.find<Api>()
+          .viewArticle(widget.discussion.id)
+          .then((serverViews) {
+        if (serverViews != null) {
+          c.markDiscussionReadAndViewed(
+            widget.discussion,
+            serverViews: serverViews,
+          );
+        }
+      })
+          .catchError((e) {
+        logger.e('Failed to record article view', error: e);
+      });
     });
 
     scrollController.addListener(() {

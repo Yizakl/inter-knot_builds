@@ -112,8 +112,16 @@ extension ArticleApi on Api {
   }
 
 
-  Future<void> viewArticle(String id) async {
-    await post('/api/articles/$id/view', {});
+  Future<int?> viewArticle(String id) async {
+    // 浏览量统计接口非幂等，服务端已按用户/IP+documentId 做 5 分钟去重（VIEW_COOLDOWN_SEC），
+    // 因此客户端不启用自动重试，避免在服务端去重窗口之外出现重复计数。
+    final res = await post('/api/articles/$id/view', {});
+    final body = res.body;
+    if (body is Map<String, dynamic>) {
+      final views = body['views'];
+      if (views is num) return views.toInt();
+    }
+    return null;
   }
 
 
