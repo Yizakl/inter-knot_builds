@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_widget_from_html/flutter_widget_from_html.dart';
 import 'package:get/get.dart';
 import 'package:inter_knot/api/api.dart';
+import 'package:inter_knot/components/rich_text/ik_content_text.dart';
 import 'package:inter_knot/components/avatar.dart';
 import 'package:inter_knot/components/image_viewer.dart';
 import 'package:inter_knot/components/my_chip.dart';
@@ -30,8 +30,12 @@ class Comment extends StatefulWidget {
 
   final DiscussionModel discussion;
   final bool loading;
-  final void Function(String parentId, String? userName, {bool addPrefix})?
-      onReply;
+  final void Function(
+    String parentId,
+    String? userName, {
+    bool addPrefix,
+    String? authorDocumentId,
+  })? onReply;
 
   final bool useListView;
   final ScrollController? controller;
@@ -337,20 +341,27 @@ class _CommentState extends State<Comment> {
             children: [
               const SizedBox(height: 8),
               SelectionArea(
-                child: HtmlWidget(
-                  comment.bodyHTML,
-                  textStyle: const TextStyle(
+                child: IkContentText(
+                  comment.rawBodyText,
+                  style: const TextStyle(
                     fontSize: 16,
                     color: Color(0xffE0E0E0), // Force light grey color
                   ),
-                  onTapImage: (data) {
-                    if (data.sources.isEmpty) return;
-                    final url = data.sources.first.url;
-                    ImageViewer.show(context,
-                        imageUrls: [url], heroTagPrefix: null);
+                  onMentionTap: (authorDocumentId) {
+                    if (authorDocumentId.isEmpty) return;
+                    showZZZDialog(
+                      context: context,
+                      pageBuilder: (_) => ProfilePage(
+                        authorDocumentId: authorDocumentId,
+                      ),
+                    );
                   },
                 ),
               ),
+              if (comment.images.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                _buildImageGrid(context, comment.images),
+              ],
               const SizedBox(height: 8),
               Row(
                 children: [
@@ -366,8 +377,11 @@ class _CommentState extends State<Comment> {
                   const SizedBox(width: 8),
                   TextButton(
                     onPressed: () => widget.onReply?.call(
-                        comment.id, comment.author.name,
-                        addPrefix: false),
+                      comment.id,
+                      comment.author.name,
+                      addPrefix: false,
+                      authorDocumentId: comment.author.authorId,
+                    ),
                     style: ButtonStyle(
                       padding: WidgetStateProperty.all(EdgeInsets.zero),
                       minimumSize: WidgetStateProperty.all(Size.zero),
@@ -447,8 +461,18 @@ class _CommentState extends State<Comment> {
                       alignment: 0.0,
                     );
                   },
-                  onReply: (id, userName, {addPrefix = false}) =>
-                      widget.onReply?.call(id, userName, addPrefix: addPrefix)),
+                  onReply: (
+                          id,
+                          userName, {
+                          addPrefix = false,
+                          authorDocumentId,
+                        }) =>
+                      widget.onReply?.call(
+                        id,
+                        userName,
+                        addPrefix: addPrefix,
+                        authorDocumentId: authorDocumentId,
+                      )),
             ],
           ),
         );
@@ -602,23 +626,27 @@ class _CommentState extends State<Comment> {
                 ],
                 const SizedBox(height: 10),
                 SelectionArea(
-                  child: HtmlWidget(
-                    comment.bodyHTML,
-                    textStyle: const TextStyle(
+                  child: IkContentText(
+                    comment.rawBodyText,
+                    style: const TextStyle(
                       fontSize: 16,
                       color: Color(0xffE0E0E0),
                     ),
-                    onTapImage: (data) {
-                      if (data.sources.isEmpty) return;
-                      final url = data.sources.first.url;
-                      ImageViewer.show(
-                        context,
-                        imageUrls: [url],
-                        heroTagPrefix: null,
+                    onMentionTap: (authorDocumentId) {
+                      if (authorDocumentId.isEmpty) return;
+                      showZZZDialog(
+                        context: context,
+                        pageBuilder: (_) => ProfilePage(
+                          authorDocumentId: authorDocumentId,
+                        ),
                       );
                     },
                   ),
                 ),
+                if (comment.images.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _buildImageGrid(context, comment.images),
+                ],
                 const SizedBox(height: 8),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
@@ -644,6 +672,7 @@ class _CommentState extends State<Comment> {
                               comment.id,
                               comment.author.name,
                               addPrefix: false,
+                              authorDocumentId: comment.author.authorId,
                             ),
                             style: ButtonStyle(
                               padding: WidgetStateProperty.all(EdgeInsets.zero),
@@ -733,8 +762,18 @@ class _CommentState extends State<Comment> {
                       alignment: 0.0,
                     );
                   },
-                  onReply: (id, userName, {addPrefix = false}) =>
-                      widget.onReply?.call(id, userName, addPrefix: addPrefix),
+                  onReply: (
+                          id,
+                          userName, {
+                          addPrefix = false,
+                          authorDocumentId,
+                        }) =>
+                      widget.onReply?.call(
+                        id,
+                        userName,
+                        addPrefix: addPrefix,
+                        authorDocumentId: authorDocumentId,
+                      ),
                 ),
               ],
             ),
@@ -742,6 +781,39 @@ class _CommentState extends State<Comment> {
           const Divider(thickness: 2, height: 32),
         ],
       ),
+    );
+  }
+
+  Widget _buildImageGrid(BuildContext context, List<String> images) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: images.asMap().entries.map((entry) {
+        final index = entry.key;
+        final url = entry.value;
+        return GestureDetector(
+          onTap: () => ImageViewer.show(
+            context,
+            imageUrls: images,
+            initialIndex: index,
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Image.network(
+              url,
+              width: 96,
+              height: 96,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => Container(
+                width: 96,
+                height: 96,
+                color: Colors.grey[800],
+                child: const Icon(Icons.broken_image, color: Colors.grey),
+              ),
+            ),
+          ),
+        );
+      }).toList(),
     );
   }
 

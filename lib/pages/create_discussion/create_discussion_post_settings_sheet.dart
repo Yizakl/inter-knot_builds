@@ -6,6 +6,8 @@ Future<void> showCreateDiscussionPostSettingsSheet({
   required ValueChanged<bool> onCompressionChanged,
   Future<void> Function()? onDeleteDraft,
   bool showDeleteDraft = false,
+  Future<void> Function()? onDiscard,
+  bool showDiscard = false,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -69,7 +71,11 @@ Future<void> showCreateDiscussionPostSettingsSheet({
                       ),
                       trailing: Switch(
                         value: localCompress,
-                        activeThumbColor: const Color(0xffD7FF00),
+                        thumbColor: WidgetStateProperty.resolveWith(
+                          (states) => states.contains(WidgetState.selected)
+                              ? const Color(0xffD7FF00)
+                              : null,
+                        ),
                         onChanged: (value) {
                           setSheetState(() {
                             localCompress = value;
@@ -79,6 +85,38 @@ Future<void> showCreateDiscussionPostSettingsSheet({
                       ),
                     ),
                   ),
+                  if (showDiscard && onDiscard != null) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xff1F1F1F),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xff2D2D2D)),
+                      ),
+                      child: ListTile(
+                        leading: const Icon(
+                          Icons.undo_outlined,
+                          color: Color(0xffFF6B6B),
+                        ),
+                        title: const Text(
+                          '放弃修改',
+                          style: TextStyle(
+                            color: Color(0xffFF6B6B),
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        trailing: const Icon(
+                          Icons.chevron_right,
+                          color: Color(0xff686868),
+                        ),
+                        onTap: () async {
+                          Navigator.of(sheetContext).pop();
+                          await onDiscard();
+                        },
+                      ),
+                    ),
+                  ],
                   if (showDeleteDraft && onDeleteDraft != null) ...[
                     const SizedBox(height: 10),
                     Container(

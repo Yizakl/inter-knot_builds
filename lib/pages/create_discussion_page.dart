@@ -11,14 +11,13 @@ import 'package:image_picker/image_picker.dart';
 import 'package:inter_knot/api/api.dart';
 import 'package:inter_knot/controllers/data.dart';
 import 'package:inter_knot/helpers/dialog_helper.dart';
-import 'package:inter_knot/helpers/drop_zone.dart';
+
 import 'package:inter_knot/helpers/image_dimension_helper.dart';
 import 'package:inter_knot/helpers/image_compress_helper.dart';
 import 'package:inter_knot/helpers/throttle.dart';
 import 'package:inter_knot/helpers/toast.dart';
 import 'package:inter_knot/helpers/upload_task.dart';
-import 'package:inter_knot/helpers/web_hooks.dart';
-import 'package:inter_knot/models/captcha.dart';
+
 import 'package:inter_knot/models/h_data.dart';
 import 'package:markdown_quill/markdown_quill.dart';
 
@@ -33,7 +32,6 @@ import 'package:inter_knot/pages/create_discussion/create_discussion_post_settin
 
 import 'package:inter_knot/models/discussion.dart';
 import 'package:markdown/markdown.dart' as md;
-import 'package:inter_knot/services/captcha_service.dart';
 
 class CreateDiscussionPage extends StatefulWidget {
   const CreateDiscussionPage({
@@ -75,7 +73,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
   // Images State — each image is tracked as an UploadTask with its own status/progress
   final RxList<UploadTask> _uploadTasks = <UploadTask>[].obs;
   bool _compressBeforeUpload = true;
-  bool _isDragging = false; // 拖拽状态
+
   Timer? _autoSaveDebounce;
   Future<void>? _saveDraftFuture;
   bool _isInitializingDraft = false;
@@ -85,8 +83,11 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
   bool _hasUnsavedChanges = false;
   bool _suppressChangeTracking = false;
   bool _isDesktopEditorActive = true;
-  late final bool _draftFeaturesEnabled;
+  bool _draftFeaturesEnabled = true;
+  bool _isEditingPublished = false;
+  bool _isDiscardingChanges = false;
   String? _documentId;
+  String? _selectedCategorySlug;
   String _lastSavedSnapshot = '';
   List<dynamic>? _persistedEditorState;
   String _persistedBodyText = '';
@@ -101,7 +102,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
   final Queue<Completer<void>> _compressionWaiters = Queue<Completer<void>>();
   int _activeCompressionCount = 0;
 
-  int get _maxCompressionConcurrency => kIsWeb ? 1 : 2;
+  int get _maxCompressionConcurrency => 2;
 
   /// 已成功上传的图片（便捷 getter）
   List<({String id, String url})> get _uploadedImages => _uploadTasks
@@ -139,6 +140,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
       !_isSavingDraft &&
       !_isPublishing &&
       !_isDeletingDraft &&
+      !_isDiscardingChanges &&
       !_isCoverUploading &&
       titleController.text.trim().isNotEmpty &&
       (_currentBodyText.trim().isNotEmpty || _uploadedImages.isNotEmpty);
@@ -184,6 +186,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
       'text': _currentBodyText,
       'editorState': _currentEditorState,
       'cover': _currentCoverPayload,
+      'category': _selectedCategorySlug,
     };
   }
 
@@ -209,10 +212,6 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
   }
 
   void _markDraftDirty({bool scheduleSave = true}) {
-    if (!_draftFeaturesEnabled) {
-      return;
-    }
-
     if (_suppressChangeTracking) {
       return;
     }
@@ -256,6 +255,12 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
     }
   }
 
+  void _onCategorySelected(String? slug) {
+    if (_selectedCategorySlug == slug) return;
+    setState(() => _selectedCategorySlug = slug);
+    _markDraftDirty();
+  }
+
   bool _isAllowedImageFilename(String filename) {
     final ext = filename.split('.').last.toLowerCase();
     return _allowedImageExtensions.contains(ext);
@@ -277,11 +282,6 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
   String _extractResponseMessage(Response<Map<String, dynamic>> res) {
     final body = res.body;
     if (body != null) {
-      final resolved = CaptchaService.resolveErrorMessageFromBody(body);
-      if (resolved != null && resolved.isNotEmpty) {
-        return resolved;
-      }
-
       final error = body['error'];
       if (error is Map) {
         final message = error['message']?.toString();
@@ -412,6 +412,11 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
 
     try {
       final nextDiscussion = await api.getMyDraftDetail(item.id);
+      _isEditingPublished = nextDiscussion.hasPublishedVersion;
+      _draftFeaturesEnabled = !_isEditingPublished;
+      if (_isEditingPublished && _selectedIndex == 2) {
+        _selectedIndex = 0;
+      }
       _applyDiscussionToEditor(nextDiscussion);
       if (mounted && _pageController.hasClients) {
         _pageController.jumpToPage(0);
@@ -478,68 +483,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
     );
   }
 
-  /// 设置粘贴事件监听
-  void _setupPasteListener() {
-    setupPasteListener((filename, bytes, mimeType) {
-      if (!_isAllowedImageFilename(filename)) {
-        showToast('不支持的文件格式，仅支持 JPEG, PNG, GIF, WEBP', isError: true);
-        return;
-      }
 
-      // 在光标位置插入占位符并开始上传
-      final index = _quillController.selection.start;
-      _uploadImageAndInsert(
-        insertIndex: index,
-        filename: filename,
-        bytes: bytes,
-        mimeType: mimeType,
-      );
-    });
-  }
-
-  /// 设置拖拽事件监听（Web 平台）
-  void _setupDropZone() {
-    setupDropZone(
-      onDropImage: (filename, bytes, mimeType) {
-        _handleDroppedImages([
-          (
-            filename: filename,
-            bytes: bytes,
-            mimeType: mimeType,
-          )
-        ]);
-      },
-      onDragStatusChanged: (isDragging) {
-        setState(() {
-          _isDragging = isDragging;
-        });
-      },
-    );
-  }
-
-  /// 处理拖拽上传的图片（用于封面）
-  Future<void> _handleDroppedImages(
-      List<({String filename, Uint8List bytes, String mimeType})> files) async {
-    if (_uploadTasks.length >= _maxCoverImages) {
-      showToast('最多上传 9 张图片', isError: true);
-      return;
-    }
-
-    final remaining = _maxCoverImages - _uploadTasks.length;
-    final toUpload = files.take(remaining).toList();
-
-    for (final file in toUpload) {
-      if (file.bytes.length > _maxImageBytes) {
-        showToast('图片 ${file.filename} 超过 30MB，已跳过', isError: true);
-        continue;
-      }
-      _enqueueUploadTask(
-        filename: file.filename,
-        bytes: file.bytes,
-        mimeType: file.mimeType,
-      );
-    }
-  }
 
   /// 创建上传任务并立即开始压缩+上传（并行）
   void _enqueueUploadTask({
@@ -861,12 +805,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
           continue;
         }
 
-        final Uint8List bytes;
-        if (kIsWeb) {
-          bytes = await file.readAsBytes();
-        } else {
-          bytes = await compute(_readXFileBytes, file.path);
-        }
+        final Uint8List bytes = await compute(_readXFileBytes, file.path);
         final mimeType = file.mimeType ?? 'image/jpeg';
 
         _enqueueUploadTask(
@@ -905,10 +844,6 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
   }
 
   Future<void> _saveDraft({bool force = false}) async {
-    if (!_draftFeaturesEnabled && !force) {
-      return;
-    }
-
     final inFlight = _saveDraftFuture;
     if (inFlight != null) {
       await inFlight;
@@ -929,10 +864,6 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
   }
 
   Future<void> _performSaveDraft({bool force = false}) async {
-    if (!_draftFeaturesEnabled && !force) {
-      return;
-    }
-
     if (_isInitializingDraft) {
       return;
     }
@@ -953,7 +884,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
       throw Exception('无法关联作者，请重新登录后再试');
     }
 
-    if (_draftFeaturesEnabled && mounted) {
+    if (mounted) {
       setState(() {
         _isSavingDraft = true;
       });
@@ -968,6 +899,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
           editorState: payload['editorState'] as List<dynamic>?,
           coverId: payload['cover'],
           authorId: authorId,
+          categorySlug: payload['category'] as String?,
         );
       } else {
         res = await api.updateArticleDraft(
@@ -977,6 +909,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
           editorState: payload['editorState'] as List<dynamic>?,
           coverId: payload['cover'],
           authorId: authorId,
+          categorySlug: payload['category'] as String?,
         );
       }
 
@@ -1020,7 +953,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
       _hasUnsavedChanges = true;
       rethrow;
     } finally {
-      if (_draftFeaturesEnabled && mounted) {
+      if (mounted) {
         setState(() {
           _isSavingDraft = false;
         });
@@ -1033,6 +966,10 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
     try {
       _setCurrentDiscussion(discussion);
       titleController.text = discussion.title;
+      _selectedCategorySlug =
+          (discussion.category?.slug.isNotEmpty ?? false)
+              ? discussion.category!.slug
+              : null;
       _mobileBodyController.text = discussion.rawBodyText;
 
       try {
@@ -1083,18 +1020,6 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
   }
 
   Future<void> _loadDraftIfNeeded() async {
-    if (!_draftFeaturesEnabled) {
-      return;
-    }
-
-    final shouldLoadDraft =
-        widget.documentId != null && widget.documentId!.isNotEmpty
-            ? widget.discussion == null || widget.discussion!.isEditableDraft
-            : (_activeDiscussion?.isEditableDraft ?? false);
-    if (!shouldLoadDraft) {
-      return;
-    }
-
     final draftId = widget.documentId ?? _activeDiscussion?.id;
     if (draftId == null || draftId.isEmpty) {
       return;
@@ -1108,6 +1033,16 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
 
     try {
       final loadedDiscussion = await api.getMyDraftDetail(draftId);
+      _isEditingPublished = loadedDiscussion.hasPublishedVersion;
+      _draftFeaturesEnabled = !_isEditingPublished;
+
+      if (_isEditingPublished && _selectedIndex == 2) {
+        _selectedIndex = 0;
+        if (_pageController.hasClients) {
+          _pageController.jumpToPage(0);
+        }
+      }
+
       if (widget.discussion != null && widget.discussion!.id == draftId) {
         widget.discussion!.updateFrom(loadedDiscussion);
         widget.discussion!.id = loadedDiscussion.id;
@@ -1117,7 +1052,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
       }
     } catch (e) {
       debugPrint('Load draft failed: $e');
-      if (_activeDiscussion == null && mounted) {
+      if (mounted) {
         showToast('加载草稿失败: $e', isError: true);
       }
     } finally {
@@ -1132,8 +1067,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
   Future<void> _handleClose() async {
     _autoSaveDebounce?.cancel();
 
-    if (_draftFeaturesEnabled &&
-        _hasUnsavedChanges &&
+    if (_hasUnsavedChanges &&
         (_documentId != null || _hasAnyDraftContent)) {
       try {
         await _saveDraft(force: true);
@@ -1164,6 +1098,14 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
       return;
     }
 
+    _autoSaveDebounce?.cancel();
+    final inFlight = _saveDraftFuture;
+    if (inFlight != null) {
+      try {
+        await inFlight;
+      } catch (_) {}
+    }
+
     if (mounted) {
       setState(() {
         _isDeletingDraft = true;
@@ -1176,7 +1118,6 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
         throw Exception(_extractResponseMessage(res));
       }
 
-      _autoSaveDebounce?.cancel();
       await _refreshDraftEntries(silent: true);
 
       if (!mounted) {
@@ -1198,6 +1139,63 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
     }
   }
 
+  Future<void> _discardChanges() async {
+    final documentId = _documentId;
+    if (documentId == null || documentId.isEmpty || !_isEditingPublished) {
+      return;
+    }
+
+    final confirmed = await showDeleteConfirmDialog(
+      context: context,
+      title: '放弃修改',
+      message: '确定放弃未发布的修改吗？内容将恢复为线上版本。',
+      confirmText: '放弃修改',
+      width: 300,
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+
+    _autoSaveDebounce?.cancel();
+    final inFlight = _saveDraftFuture;
+    if (inFlight != null) {
+      try {
+        await inFlight;
+      } catch (_) {}
+    }
+
+    if (mounted) {
+      setState(() {
+        _isDiscardingChanges = true;
+      });
+    }
+
+    try {
+      final res = await api.discardArticleDraft(documentId);
+      if (res.hasError) {
+        throw Exception(_extractResponseMessage(res));
+      }
+      final detail = await api.getMyDraftDetail(documentId);
+      _isEditingPublished = detail.hasPublishedVersion;
+      _draftFeaturesEnabled = !_isEditingPublished;
+      _applyDiscussionToEditor(detail);
+      _hasUnsavedChanges = false;
+      _syncSavedSnapshot();
+      showToast('已恢复为线上版本');
+    } catch (e) {
+      if (mounted) {
+        showToast('放弃修改失败: $e', isError: true);
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isDiscardingChanges = false;
+        });
+      }
+    }
+  }
+
   @override
   void dispose() {
     _autoSaveDebounce?.cancel();
@@ -1208,28 +1206,22 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
     titleController.dispose();
     _mobileBodyController.dispose();
     _quillController.dispose();
-    if (kIsWeb) {
-      removePasteListener();
-      removeDropZone();
-    }
     super.dispose();
   }
 
   @override
   void initState() {
     super.initState();
-    _draftFeaturesEnabled =
-        widget.discussion == null || widget.discussion!.isEditableDraft;
     _activeDiscussion = widget.discussion;
     _documentId = widget.documentId ?? _activeDiscussion?.id;
+    _isEditingPublished = _activeDiscussion?.hasPublishedVersion == true;
+    _draftFeaturesEnabled = !_isEditingPublished;
     titleController.addListener(_handleTitleChanged);
     _mobileBodyController.addListener(_handleMobileBodyChanged);
     _quillController.addListener(_handleQuillChanged);
-
-    // 设置 Web 平台剪贴板粘贴监听
-    if (kIsWeb) {
-      _setupPasteListener();
-      _setupDropZone();
+    // 分区列表通常已在 Controller.onInit 拉过；仅在为空（如首次拉取失败）时补拉。
+    if (c.categories.isEmpty) {
+      unawaited(c.loadCategories());
     }
 
     if (_activeDiscussion != null) {
@@ -1271,28 +1263,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
         throw Exception('草稿保存成功后仍缺少 documentId');
       }
 
-      final captchaService = Get.find<CaptchaService>();
-      CaptchaPayload? captcha = await captchaService.verifyForArticlePublish();
-
-      var res = await api.publishArticleDraft(
-        id: documentId,
-        captcha: captcha,
-      );
-
-      if (res.hasError &&
-          CaptchaService.isCaptchaRequiredResponse(
-            res.body,
-            expectedScene: CaptchaScene.articlePublish,
-          )) {
-        captcha = await captchaService.verifyForRequiredResponse(
-          fallbackScene: CaptchaScene.articlePublish,
-          body: res.body,
-        );
-        res = await api.publishArticleDraft(
-          id: documentId,
-          captcha: captcha,
-        );
-      }
+      final res = await api.publishArticleDraft(id: documentId);
 
       if (res.hasError) {
         throw Exception(_extractResponseMessage(res));
@@ -1314,10 +1285,10 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
       }
 
       Get.back(result: true);
-      showToast('发布成功');
+      showToast(_isEditingPublished ? '更新成功' : '发布成功');
       c.refreshSearchData();
     } catch (e) {
-      showToast('发布失败: $e', isError: true);
+      showToast(_isEditingPublished ? '更新失败: $e' : '发布失败: $e', isError: true);
     } finally {
       if (mounted) {
         setState(() {
@@ -1338,6 +1309,8 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
       },
       showDeleteDraft: _supportsDeleteCurrentDraft,
       onDeleteDraft: _supportsDeleteCurrentDraft ? _deleteCurrentDraft : null,
+      showDiscard: _isEditingPublished,
+      onDiscard: _isEditingPublished ? _discardChanges : null,
     );
   }
 
@@ -1359,6 +1332,8 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
       titleController: titleController,
       quillController: _quillController,
       onPickAndUploadImage: _pickAndUploadImage,
+      selectedCategorySlug: _selectedCategorySlug,
+      onCategorySelected: _onCategorySelected,
       isMobile: true,
       mobileBodyController: _mobileBodyController,
       mobileUploadTasks: _uploadTasks,
@@ -1386,19 +1361,14 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
         titleController: titleController,
         quillController: _quillController,
         onPickAndUploadImage: _pickAndUploadImage,
+        selectedCategorySlug: _selectedCategorySlug,
+        onCategorySelected: _onCategorySelected,
       ),
       CreateDiscussionCoverPage(
         uploadTasks: _uploadTasks,
-        isDragging: _isDragging,
         onPickImages: _pickImages,
         onRemoveImageAt: _removeUploadTask,
         onRetryAt: _retryUploadTask,
-        onDroppedImages: _handleDroppedImages,
-        onDraggingChanged: (isDragging) {
-          setState(() {
-            _isDragging = isDragging;
-          });
-        },
       ),
       if (_draftFeaturesEnabled) draftsPage,
     ];
@@ -1436,6 +1406,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
                   onSubmit: () => _publish(isMobile: true),
                   draftCount: _draftEntries.length,
                   showDraftButton: _draftFeaturesEnabled,
+                  isEditingPublished: _isEditingPublished,
                 ),
               ),
             ),
@@ -1445,7 +1416,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
             // Header
             CreateDiscussionHeader(
               controller: c,
-              title: '发布委托',
+              title: _isEditingPublished ? '编辑帖子' : '发布委托',
               onClose: _handleClose,
             ),
             // Body
@@ -1485,6 +1456,7 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
                                   isSavingDraft: _isSavingDraft,
                                   isPublishing: _isPublishing,
                                   isDeletingDraft: _isDeletingDraft,
+                                  isDiscardingChanges: _isDiscardingChanges,
                                   onSubmit: () => _publish(),
                                   submitEnabled: _canPublish,
                                   showCompressionToggle: _selectedIndex == 1,
@@ -1497,6 +1469,9 @@ class _CreateDiscussionPageState extends State<CreateDiscussionPage> {
                                   showDeleteButton: _selectedIndex != 2 &&
                                       _supportsDeleteCurrentDraft,
                                   onDeleteDraft: _deleteCurrentDraft,
+                                  showDiscardButton: _isEditingPublished,
+                                  onDiscard: _discardChanges,
+                                  isEditingPublished: _isEditingPublished,
                                 ),
                             ],
                           ),

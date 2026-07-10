@@ -14,7 +14,7 @@ import 'package:inter_knot/pages/discussion/discussion_desktop_body.dart';
 import 'package:inter_knot/pages/discussion/discussion_detail_box.dart';
 import 'package:inter_knot/pages/discussion/discussion_header_bar.dart';
 import 'package:inter_knot/pages/discussion/new_comment_notification.dart';
-import 'package:inter_knot/pages/discussion/sticky_header_delegate.dart';
+
 
 class DiscussionPage extends StatefulWidget {
   const DiscussionPage({
@@ -59,14 +59,10 @@ class _DiscussionPageState extends State<DiscussionPage> {
       final fullDiscussion =
           await Get.find<Api>().getArticleDetail(widget.discussion.id);
       if (mounted) {
-        // 先更新数据，不触发setState
         widget.discussion.updateFrom(fullDiscussion);
-        // 只更新加载状态，避免整个页面重建
-        if (_isDetailLoading) {
-          setState(() {
-            _isDetailLoading = false;
-          });
-        }
+        setState(() {
+          _isDetailLoading = false;
+        });
       }
     } catch (e) {
       logger.e('Failed to fetch article details', error: e);
@@ -98,11 +94,24 @@ class _DiscussionPageState extends State<DiscussionPage> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final wasRead = widget.discussion.isRead;
+      // 先立即完成本地的已读 + 浏览量乐观更新，再异步同步服务端
       c.markDiscussionReadAndViewed(widget.discussion);
       if (!wasRead) {
         Get.find<Api>().markAsRead(widget.discussion.id);
       }
-      Get.find<Api>().viewArticle(widget.discussion.id);
+      Get.find<Api>()
+          .viewArticle(widget.discussion.id)
+          .then((serverViews) {
+        if (serverViews != null) {
+          c.markDiscussionReadAndViewed(
+            widget.discussion,
+            serverViews: serverViews,
+          );
+        }
+      })
+          .catchError((e) {
+        logger.e('Failed to record article view', error: e);
+      });
     });
 
     scrollController.addListener(() {
@@ -182,7 +191,8 @@ class _DiscussionPageState extends State<DiscussionPage> {
 
   Future<void> _checkNewComments({bool syncOnly = false}) async {
     try {
-      final count = await Get.find<Api>().getCommentCount(widget.discussion.id);
+      final count =
+          await Get.find<Api>().getCommentCount(widget.discussion.id);
       if (syncOnly) {
         final shouldRefresh = count != widget.discussion.commentsCount;
         widget.discussion.commentsCount = count;
@@ -190,9 +200,7 @@ class _DiscussionPageState extends State<DiscussionPage> {
           _newCommentCounts.value =
               const NewCommentCounts(newCount: 0, serverCount: 0);
         }
-        if (shouldRefresh && mounted) {
-          setState(() {});
-        }
+        if (shouldRefresh && mounted) setState(() {});
         return;
       }
 
@@ -201,16 +209,12 @@ class _DiscussionPageState extends State<DiscussionPage> {
           newCount: count - widget.discussion.commentsCount,
           serverCount: count,
         );
-      } else {
-        // If server count is less or equal (e.g. deletion), sync it?
-        // Or just ignore.
-        if (_newCommentCounts.value.newCount > 0) {
-          _newCommentCounts.value =
-              const NewCommentCounts(newCount: 0, serverCount: 0);
-        }
+      } else if (_newCommentCounts.value.newCount > 0) {
+        _newCommentCounts.value =
+            const NewCommentCounts(newCount: 0, serverCount: 0);
       }
     } catch (e) {
-      // ignore
+      // 静默失败：拉不到服务端评论数时不打扰用户
     }
   }
 
@@ -347,20 +351,17 @@ class _DiscussionPageState extends State<DiscussionPage> {
                                                             widget.discussion,
                                                       ),
                                               ),
-                                              SliverPersistentHeader(
-                                                pinned: true,
-                                                delegate: StickyHeaderDelegate(
-                                                  child:
-                                                      DiscussionActionButtons(
-                                                    key: actionButtonsKey,
-                                                    discussion:
-                                                        widget.discussion,
-                                                    hData: widget.hData,
-                                                    onCommentAdded:
-                                                        _handleCommentAdded,
-                                                    onEditSuccess: () =>
-                                                        setState(() {}),
-                                                  ),
+                                              SliverToBoxAdapter(
+                                                child: DiscussionActionButtons(
+                                                  key: actionButtonsKey,
+                                                  discussion:
+                                                      widget.discussion,
+                                                  hData: widget.hData,
+                                                  onCommentAdded:
+                                                      _handleCommentAdded,
+                                                  onEditSuccess: () {
+                                                    _fetchArticleDetails();
+                                                  },
                                                 ),
                                               ),
                                               SliverToBoxAdapter(
@@ -378,15 +379,20 @@ class _DiscussionPageState extends State<DiscussionPage> {
                                                             widget.discussion,
                                                         isInitialLoading:
                                                             _isInitialLoading,
-                                                        onReply: (id, userName,
-                                                                {addPrefix =
-                                                                    false}) =>
+                                                        onReply: (
+                                                          id,
+                                                          userName, {
+                                                          addPrefix = false,
+                                                          authorDocumentId,
+                                                        }) =>
                                                             actionButtonsKey
                                                                 .currentState
                                                                 ?.replyTo(
                                                           id,
                                                           userName,
                                                           addPrefix: addPrefix,
+                                                          authorDocumentId:
+                                                              authorDocumentId,
                                                         ),
                                                       ),
                                                     ],
@@ -418,7 +424,9 @@ class _DiscussionPageState extends State<DiscussionPage> {
                                         onTap: _handleNewCommentNotificationTap,
                                       ),
                                       onCommentAdded: _handleCommentAdded,
-                                      onEditSuccess: () => setState(() {}),
+                                      onEditSuccess: () {
+                                        _fetchArticleDetails();
+                                      },
                                     );
                                   },
                                 ),

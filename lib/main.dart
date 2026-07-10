@@ -11,14 +11,14 @@ import 'package:inter_knot/components/fade_indexed_stack.dart';
 import 'package:inter_knot/components/my_app_bar.dart';
 import 'package:inter_knot/components/update_dialog.dart';
 import 'package:inter_knot/controllers/data.dart';
+import 'package:inter_knot/controllers/messaging_controller.dart';
 import 'package:inter_knot/helpers/app_scroll_behavior.dart';
 import 'package:inter_knot/helpers/box.dart';
 import 'package:inter_knot/helpers/toast.dart';
 import 'package:inter_knot/pages/create_discussion_page.dart';
 import 'package:inter_knot/pages/home_page.dart';
-import 'package:inter_knot/pages/notification_page.dart';
+import 'package:inter_knot/pages/message_center_page.dart';
 import 'package:inter_knot/pages/search_page.dart';
-import 'package:inter_knot/services/captcha_service.dart';
 import 'package:inter_knot/services/update_service.dart';
 
 Future<void> main() async {
@@ -29,8 +29,8 @@ Future<void> main() async {
   await box.init();
   Get.put(AuthApi());
   Get.put(Api());
-  await Get.putAsync(() => CaptchaService().init());
   Get.put(Controller());
+  Get.put(MessagingController());
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
   ]);
@@ -113,7 +113,6 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   static DateTime? _lastPressedAt;
-  final controller = Get.find<Controller>();
 
   @override
   void initState() {
@@ -124,7 +123,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _checkForUpdatesOnStartup() async {
     // Only check on Android platform
-    if (!kIsWeb && Platform.isAndroid) {
+    if (Platform.isAndroid) {
       // Delay to avoid blocking app startup
       await Future.delayed(const Duration(seconds: 2));
 
@@ -154,13 +153,13 @@ class _MyHomePageState extends State<MyHomePage> {
           if (didPop) return;
 
           // 如果在我的页面，跳转到首页
-          if (controller.selectedIndex.value == 1) {
-            controller.animateToPage(0, animate: false);
+          if (c.selectedIndex.value == 1) {
+            c.animateToPage(0, animate: false);
             return;
           }
 
           // 如果在首页，显示"再按一次退出"提示
-          if (controller.selectedIndex.value == 0) {
+          if (c.selectedIndex.value == 0) {
             final now = DateTime.now();
             if (_lastPressedAt == null ||
                 now.difference(_lastPressedAt!) > const Duration(seconds: 2)) {
@@ -182,9 +181,9 @@ class _MyHomePageState extends State<MyHomePage> {
                 child: PageView(
                   physics:
                       const NeverScrollableScrollPhysics(), // Disable swipe gesture
-                  controller: controller.pageController,
+                  controller: c.pageController,
                   onPageChanged: (index) =>
-                      controller.selectedIndex.value = index,
+                      c.selectedIndex.value = index,
                   children: const [
                     SearchPage(),
                     HomePage(),
@@ -209,15 +208,15 @@ class _MyHomePageState extends State<MyHomePage> {
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: [
                   _BottomNavItem(
-                    isSelected: controller.selectedIndex.value == 0,
+                    isSelected: c.selectedIndex.value == 0,
                     icon: Icons.explore_outlined,
                     activeIcon: Icons.explore,
                     label: '推送',
-                    onTap: () => controller.animateToPage(0, animate: false),
+                    onTap: () => c.animateToPage(0, animate: false),
                     onDoubleTap: () {
                       // Double tap to refresh posts
-                      if (controller.selectedIndex.value == 0) {
-                        controller.refreshSearchData();
+                      if (c.selectedIndex.value == 0) {
+                        c.refreshSearchData();
                         showToast('正在刷新帖子...',
                             duration: const Duration(seconds: 1));
                       }
@@ -227,11 +226,11 @@ class _MyHomePageState extends State<MyHomePage> {
                     child: _buildCreateButton(context),
                   ),
                   _BottomNavItem(
-                    isSelected: controller.selectedIndex.value == 1,
+                    isSelected: c.selectedIndex.value == 1,
                     icon: Icons.person_outline,
                     activeIcon: Icons.person,
                     label: '我的',
-                    onTap: () => controller.animateToPage(1, animate: false),
+                    onTap: () => c.animateToPage(1, animate: false),
                   ),
                 ],
               ),
@@ -249,12 +248,12 @@ class _MyHomePageState extends State<MyHomePage> {
           Expanded(
             child: Obx(
               () => FadeIndexedStack(
-                index: controller.selectedIndex.value,
+                index: c.selectedIndex.value,
                 duration: Duration.zero,
-                children: [
-                  const SearchPage(),
-                  const HomePage(),
-                  NotificationPage(),
+                children: const [
+                  SearchPage(),
+                  HomePage(),
+                  MessageCenterPage(),
                 ],
               ),
             ),
@@ -267,7 +266,8 @@ class _MyHomePageState extends State<MyHomePage> {
   Widget _buildCreateButton(BuildContext context) {
     return _AnimatedCreateButton(
       onTap: () async {
-        if (await controller.ensureLogin()) {
+        if (await c.ensureLogin()) {
+          if (!context.mounted) return;
           CreateDiscussionPage.show(context);
         }
       },

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:inter_knot/controllers/interaction_controller.dart';
 import 'package:inter_knot/api/api.dart'; // Import Api
 import 'package:inter_knot/api/api_exception.dart';
 import 'package:inter_knot/constants/api_config.dart';
@@ -13,6 +14,7 @@ import 'package:inter_knot/helpers/num2dur.dart';
 import 'package:inter_knot/helpers/throttle.dart';
 import 'package:inter_knot/helpers/toast.dart';
 import 'package:inter_knot/models/author.dart';
+import 'package:inter_knot/models/category.dart';
 import 'package:inter_knot/models/comment.dart';
 import 'package:inter_knot/models/discussion.dart';
 import 'package:inter_knot/models/h_data.dart';
@@ -29,6 +31,10 @@ class Controller extends GetxController {
 
   final searchQuery = ''.obs;
   final searchResult = <HDataModel>{}.obs; // HData -> HDataModel
+  // 频道/分区：categories 为可选的 tab 列表，selectedCategorySlug 为当前过滤项
+  // （空字符串代表「全部」，不过滤）。
+  final categories = <CategoryModel>[].obs;
+  final selectedCategorySlug = ''.obs;
   // Persistent storage key for offline cache
   static const String _searchCacheKey = 'offline_search_cache';
   String? searchEndCur;
@@ -56,10 +62,15 @@ class Controller extends GetxController {
   final isUploadingAvatar = false.obs;
   final unreadNotificationCount = 0.obs;
 
-  final bookmarks = <HDataModel>{}.obs;
-  final favoriteIds = <String, String>{}.obs;
+  late final InteractionController _interaction;
+  RxSet<HDataModel> get bookmarks => _interaction.bookmarks;
+
   final history = <HDataModel>{}.obs;
+  final searchHistory = <String>[].obs;
   static const String _historyKey = 'history';
+  static const String _searchHistoryKey = 'ik:search_history';
+  static const int _maxSearchHistory = 12;
+  static const int _maxSearchKeywordLength = 64;
   static const String _localReadCacheKey = 'local_read_cache';
   static const String _localViewCacheKey = 'local_view_cache';
   static const int _localCacheMax = 500;
@@ -84,6 +95,57 @@ class Controller extends GetxController {
   void _saveHistoryToLocal() {
     try {
       pref.setStringList(_historyKey, _encodeHistoryForStorage(history));
+    } catch (_) {
+      // Ignore persistence failures.
+    }
+  }
+
+  void _loadSearchHistory() {
+    try {
+      final list = pref.getStringList(_searchHistoryKey);
+      if (list != null && list.isNotEmpty) {
+        searchHistory.assignAll(list.where((k) => k.trim().isNotEmpty).toList());
+      }
+    } catch (_) {
+      // Ignore persistence failures.
+    }
+  }
+
+  void addSearchHistory(String keyword) {
+    final trimmed = keyword.trim();
+    if (trimmed.isEmpty) return;
+    final value = trimmed.length <= _maxSearchKeywordLength
+        ? trimmed
+        : trimmed.substring(0, _maxSearchKeywordLength);
+    final lower = value.toLowerCase();
+    final next = [
+      value,
+      ...searchHistory.where((k) => k.toLowerCase() != lower),
+    ].take(_maxSearchHistory).toList();
+    searchHistory.assignAll(next);
+    try {
+      pref.setStringList(_searchHistoryKey, next);
+    } catch (_) {
+      // Ignore persistence failures.
+    }
+  }
+
+  void removeSearchHistory(String keyword) {
+    final next = searchHistory.where((k) => k != keyword).toList();
+    if (next.length == searchHistory.length) return;
+    searchHistory.assignAll(next);
+    try {
+      pref.setStringList(_searchHistoryKey, next);
+    } catch (_) {
+      // Ignore persistence failures.
+    }
+  }
+
+  void clearSearchHistory() {
+    if (searchHistory.isEmpty) return;
+    searchHistory.clear();
+    try {
+      pref.setStringList(_searchHistoryKey, []);
     } catch (_) {
       // Ignore persistence failures.
     }
@@ -230,8 +292,7 @@ class Controller extends GetxController {
     _clearCachedAvatarForUser(u);
     await box.remove('access_token');
     await box.remove('userId');
-    bookmarks.clear();
-    favoriteIds.clear();
+    _interaction.clearBookmarks();
     _localReadCache.clear();
     _localViewCache.clear();
     await box.remove(_localReadCacheKey);
@@ -282,7 +343,7 @@ class Controller extends GetxController {
     }
 
     searchResult.refresh();
-    bookmarks.refresh();
+    _interaction.bookmarks.refresh();
     history.refresh();
   }
 
@@ -402,13 +463,20 @@ class Controller extends GetxController {
     }
   }
 
-  void markDiscussionReadAndViewed(DiscussionModel discussion) {
+  void markDiscussionReadAndViewed(
+    DiscussionModel discussion, {
+    int? serverViews,
+  }) {
     final id = discussion.id;
     if (id.isEmpty) return;
     discussion.isRead = true;
     _localReadCache[id] = true;
-    final nextViews = discussion.views + 1;
+
+    final nextViews = serverViews != null
+        ? (serverViews > discussion.views ? serverViews : discussion.views)
+        : discussion.views + 1;
     discussion.views = nextViews;
+
     final cachedViews = _localViewCache[id];
     if (cachedViews == null || nextViews > cachedViews) {
       _localViewCache[id] = nextViews;
@@ -416,8 +484,9 @@ class Controller extends GetxController {
     _persistLocalReadCache();
     _persistLocalViewCache();
     HDataModel.upsertCachedDiscussion(discussion);
+    HDataModel.updateCachedDiscussion(id, views: nextViews);
     searchResult.refresh();
-    bookmarks.refresh();
+    _interaction.bookmarks.refresh();
     history.refresh();
   }
 
@@ -438,10 +507,12 @@ class Controller extends GetxController {
   @override
   Future<void> onInit() async {
     super.onInit();
+    _interaction = Get.put(InteractionController(this));
     pref = await SharedPreferencesWithCache.create(
       cacheOptions: const SharedPreferencesWithCacheOptions(),
     );
     _loadLocalCaches();
+    _loadSearchHistory();
     pageController
         .addListener(() => curPage(pageController.page?.round() ?? 0));
     pref.remove('root_token');
@@ -464,6 +535,16 @@ class Controller extends GetxController {
     final token = getToken();
     if (token.isNotEmpty) {
       try {
+        // token 续期仅为尽力而为：失败（网络/超时）时继续用现有 token，
+        // 只有后续 refreshSelfUserInfo 真的鉴权失败才按未登录清 session。
+        try {
+          final renewedToken = await api.renewToken();
+          if (renewedToken != null && renewedToken.isNotEmpty) {
+            await setToken(renewedToken);
+          }
+        } catch (e) {
+          logger.w('Token renew failed, continue with existing token: $e');
+        }
         await refreshSelfUserInfo(rethrowOnError: true);
         isLogin(true);
         await refreshFavorites();
@@ -473,33 +554,6 @@ class Controller extends GetxController {
           await _clearStoredSession();
         } else {
           logger.e('Failed to get user info', error: e);
-        }
-      }
-    } else {
-      // Check for pending activation credentials
-      final pendingEmail = box.read<String>('pending_activation_email');
-      final pendingPassword = box.read<String>('pending_activation_password');
-      if (pendingEmail != null && pendingPassword != null) {
-        // Try to login silently
-        try {
-          final res =
-              await BaseConnect.authApi.login(pendingEmail, pendingPassword);
-          if (res.token != null) {
-            await setToken(res.token!);
-            user(res.user);
-            await ensureAuthorForUser(res.user);
-            isLogin(true);
-            await refreshSelfUserInfo(rethrowOnError: true);
-            await refreshFavorites();
-            await refreshUnreadNotificationCount();
-            // Clear pending credentials
-            box.remove('pending_activation_email');
-            box.remove('pending_activation_password');
-            showToast('登录成功：欢迎回来，绳匠！');
-          }
-        } catch (e) {
-          // Ignore failures, user will see waiting screen in LoginPage if they go there
-          logger.w('Auto-login from pending activation failed: $e');
         }
       }
     }
@@ -557,6 +611,9 @@ class Controller extends GetxController {
       }
     }
 
+    // 频道列表并行加载，不阻塞首页首屏。
+    unawaited(loadCategories());
+
     try {
       await searchData();
     } catch (e) {
@@ -612,7 +669,8 @@ class Controller extends GetxController {
     if (isSearching.value) return;
 
     try {
-      final pagination = await api.search('', '');
+      final pagination =
+          await api.search('', '', categorySlug: selectedCategorySlug.value);
 
       // Check again if we started searching while waiting for api
       if (isSearching.value) return;
@@ -666,7 +724,8 @@ class Controller extends GetxController {
     _startNewPostCheck();
     isSearching(true);
     try {
-      final pagination = await api.search('', '');
+      final pagination =
+          await api.search('', '', categorySlug: selectedCategorySlug.value);
       final existingIds = searchResult.map((e) => e.id).toSet();
       final inserted = pagination.nodes
           .where((e) => e.id.isNotEmpty && !existingIds.contains(e.id))
@@ -687,11 +746,15 @@ class Controller extends GetxController {
       }
 
       // Keep offline cache in sync with latest merged list.
-      try {
-        final cacheList = searchResult.map((e) => e.toJson()).toList();
-        box.write(_searchCacheKey, cacheList);
-      } catch (e) {
-        logger.e('Failed to save offline cache', error: e);
+      // 仅在「全部」频道（无过滤）时写入通用离线缓存，避免过滤子集被当成
+      // 全量首屏在下次启动时展示。
+      if (selectedCategorySlug.value.isEmpty) {
+        try {
+          final cacheList = searchResult.map((e) => e.toJson()).toList();
+          box.write(_searchCacheKey, cacheList);
+        } catch (e) {
+          logger.e('Failed to save offline cache', error: e);
+        }
       }
 
       newPostCount.value = 0;
@@ -723,67 +786,15 @@ class Controller extends GetxController {
     unreadNotificationCount.value = 0;
   }
 
-  Future<void> refreshFavorites() async {
-    final username = user.value?.login ?? '';
-    if (isLogin.isFalse || username.isEmpty) {
-      bookmarks.clear();
-      favoriteIds.clear();
-      return;
-    }
+  Future<void> refreshFavorites() => _interaction.refreshFavorites();
 
-    final result = await api.getFavorites(username, '');
-    bookmarks(result.items.toSet());
-    favoriteIds.assignAll(result.favoriteIds);
-  }
+  Future<void> toggleFavorite(HDataModel hData) => _interaction.toggleFavorite(hData);
 
-  Future<void> toggleFavorite(HDataModel hData) async {
-    if (isLogin.isFalse) {
-      showToast('请先登录', isError: true);
-      return;
-    }
-    final userId = user.value?.userId;
-    final username = user.value?.login ?? '';
-    if (userId == null || userId.isEmpty || username.isEmpty) {
-      showToast('用户信息获取失败', isError: true);
-      return;
-    }
+  Future<void> tripleArticle(DiscussionModel discussion, HDataModel hData) =>
+      _interaction.tripleArticle(discussion, hData);
 
-    final articleId = hData.id;
-    if (articleId.isEmpty) return;
-
-    var favoriteId = favoriteIds[articleId];
-    if (favoriteId == null) {
-      favoriteId = await api.getFavoriteId(
-        username: username,
-        articleId: articleId,
-      );
-      if (favoriteId != null && favoriteId.isNotEmpty) {
-        favoriteIds[articleId] = favoriteId;
-        bookmarks({hData, ...bookmarks});
-      }
-    }
-
-    if (favoriteId != null && favoriteId.isNotEmpty) {
-      final ok = await api.deleteFavorite(favoriteId);
-      if (ok) {
-        favoriteIds.remove(articleId);
-        bookmarks.removeWhere((e) => e.id == articleId);
-      } else {
-        showToast('取消收藏失败', isError: true);
-      }
-    } else {
-      final newId = await api.createFavorite(
-        userId: userId,
-        articleId: articleId,
-      );
-      if (newId != null && newId.isNotEmpty) {
-        favoriteIds[articleId] = newId;
-        bookmarks({hData, ...bookmarks});
-      } else {
-        showToast('收藏失败', isError: true);
-      }
-    }
-  }
+  bool canTriple(DiscussionModel discussion) =>
+      _interaction.canTriple(discussion);
 
   final selectedIndex = 0.obs;
   final pageController = PageController();
@@ -810,7 +821,7 @@ class Controller extends GetxController {
   bool isFetchPinDiscussions = true;
   final searchController = SearchController();
 
-  late final refreshSearchData = throttle(() async {
+  Future<void> _reloadFeed() async {
     // 重置定时器，避免刷新时刚好触发轮询
     _startNewPostCheck();
     isSearching(true);
@@ -830,7 +841,43 @@ class Controller extends GetxController {
     } finally {
       isSearching(false);
     }
-  }, Duration.zero);
+  }
+
+  late final refreshSearchData = throttle(_reloadFeed, Duration.zero);
+
+  /// 拉取频道列表（尽力而为，失败不影响首页）。
+  Future<void> loadCategories() async {
+    try {
+      final list = await api.getCategories();
+      if (list.isNotEmpty) categories.assignAll(list);
+    } catch (e) {
+      logger.w('Failed to load categories: $e');
+    }
+  }
+
+  bool _isSwitchingCategory = false;
+
+  /// 切换当前频道过滤项并刷新首页。空 slug 代表「全部」。
+  /// 不走节流的 refreshSearchData——快速连点不同 tab 时，节流会丢弃后续刷新，
+  /// 导致 UI 高亮的分区与列表内容不一致。这里直接刷新并在拉取期间若 slug
+  /// 又变化则再刷一次，保证「最后一次点击」胜出。
+  Future<void> selectCategory(String slug) async {
+    if (selectedCategorySlug.value == slug) return;
+    selectedCategorySlug.value = slug;
+
+    // 已有切换在跑：仅更新目标 slug，正在运行的循环会重新拉取。
+    if (_isSwitchingCategory) return;
+    _isSwitchingCategory = true;
+    try {
+      String target;
+      do {
+        target = selectedCategorySlug.value;
+        await _reloadFeed();
+      } while (selectedCategorySlug.value != target);
+    } finally {
+      _isSwitchingCategory = false;
+    }
+  }
 
   final searchCache = <String?>{};
   Future<void> searchData() async {
@@ -839,7 +886,11 @@ class Controller extends GetxController {
 
     final isFirstPage = searchEndCur == null || searchEndCur!.isEmpty;
 
-    final pagination = await api.search(searchQuery(), searchEndCur ?? '');
+    final pagination = await api.search(
+      searchQuery(),
+      searchEndCur ?? '',
+      categorySlug: selectedCategorySlug.value,
+    );
     // pagination returns PaginationModel<HDataModel>
     // destructure:
     searchEndCur = pagination.endCursor;
@@ -852,10 +903,12 @@ class Controller extends GetxController {
     }
 
     // Save to offline cache if this is the first page of default search
+    // （仅「全部」频道、无搜索词时写入，过滤态不污染通用缓存）。
     if ((searchEndCur == null ||
             searchEndCur!.isEmpty ||
             searchEndCur == ApiConfig.defaultPageSize.toString()) &&
-        searchQuery().isEmpty) {
+        searchQuery().isEmpty &&
+        selectedCategorySlug.value.isEmpty) {
       try {
         final cacheList = searchResult.map((e) => e.toJson()).toList();
         box.write(_searchCacheKey, cacheList);
@@ -873,23 +926,20 @@ class Controller extends GetxController {
       authorId.value = u.authorId;
       return u.authorId;
     }
-    final name = (u.name.isNotEmpty ? u.name : u.login).trim();
-    if (name.isEmpty) return null;
-    final id = await api.ensureAuthorId(
-      name: name,
-      userId: u.userId,
-    );
-    if (id != null && id.isNotEmpty) {
-      authorId.value = id;
-      if (u.userId != null && u.userId!.isNotEmpty) {
-        try {
-          await api.linkAuthorToUser(authorId: id, userId: u.userId!);
-        } catch (_) {
-          // Best-effort linking; avoid blocking login flow.
-        }
+    // 后端在用户创建时自动创建 author，这里从 /api/me/profile 读回关联的 author。
+    try {
+      final profile = await api.getMyProfile();
+      final author = profile['author'];
+      final id = author is Map ? author['documentId']?.toString() : null;
+      if (id != null && id.isNotEmpty) {
+        authorId.value = id;
+        u.authorId = id;
+        return id;
       }
+    } catch (e) {
+      logger.w('Failed to resolve author from /me/profile', error: e);
     }
-    return id;
+    return null;
   }
 
   Future<bool> ensureLogin() async {
@@ -928,17 +978,8 @@ class Controller extends GetxController {
 
     isUploadingAvatar(true);
     try {
-      final curUser = user.value;
-      final targetAuthorId = authorId.value ??
-          curUser?.authorId ??
-          await ensureAuthorForUser(curUser);
-      if (targetAuthorId == null || targetAuthorId.isEmpty) {
-        throw Exception('未找到作者信息');
-      }
-
       final bytes = await file.readAsBytes();
       final avatarUrl = await api.uploadAvatar(
-        authorId: targetAuthorId,
         bytes: bytes,
         filename: file.name,
       );
@@ -960,79 +1001,11 @@ class Controller extends GetxController {
     }
   }
 
-  Future<void> toggleArticleLike(DiscussionModel discussion) async {
-    if (isLogin.isFalse) {
-      if (!await ensureLogin()) return;
-    }
+  Future<void> toggleArticleLike(DiscussionModel discussion) =>
+      _interaction.toggleArticleLike(discussion);
 
-    final oldLiked = discussion.liked;
-    final oldCount = discussion.likesCount;
-
-    // Optimistic update
-    discussion.liked = !oldLiked;
-    discussion.likesCount = oldLiked
-        ? (oldCount > 0 ? oldCount - 1 : 0)
-        : oldCount + 1;
-
-    // Update cached discussion
-    HDataModel.upsertCachedDiscussion(discussion);
-    searchResult.refresh();
-    bookmarks.refresh();
-    history.refresh();
-
-    try {
-      final result = await api.toggleLike(
-        targetType: 'article',
-        targetId: discussion.id,
-      );
-      // Reconcile with server response
-      discussion.liked = result.liked;
-      discussion.likesCount = result.likesCount;
-      HDataModel.upsertCachedDiscussion(discussion);
-      searchResult.refresh();
-      bookmarks.refresh();
-      history.refresh();
-    } catch (e) {
-      // Rollback on error
-      discussion.liked = oldLiked;
-      discussion.likesCount = oldCount;
-      HDataModel.upsertCachedDiscussion(discussion);
-      searchResult.refresh();
-      bookmarks.refresh();
-      history.refresh();
-      showToast('操作失败: $e', isError: true);
-    }
-  }
-
-  Future<void> toggleCommentLike(CommentModel comment) async {
-    if (isLogin.isFalse) {
-      if (!await ensureLogin()) return;
-    }
-
-    final oldLiked = comment.liked;
-    final oldCount = comment.likesCount;
-
-    // Optimistic update
-    comment.liked = !oldLiked;
-    comment.likesCount = oldLiked
-        ? (oldCount > 0 ? oldCount - 1 : 0)
-        : oldCount + 1;
-
-    try {
-      final result = await api.toggleLike(
-        targetType: 'comment',
-        targetId: comment.id,
-      );
-      // Reconcile with server response
-      comment.liked = result.liked;
-      comment.likesCount = result.likesCount;
-    } catch (e) {
-      // Rollback on error
-      comment.liked = oldLiked;
-      comment.likesCount = oldCount;
-      showToast('操作失败: $e', isError: true);
-    }
-  }
+  Future<void> toggleCommentLike(CommentModel comment) =>
+      _interaction.toggleCommentLike(comment);
 
   Future<void> updateUsername(String newName) async {
     if (isLogin.isFalse) {
@@ -1049,29 +1022,13 @@ class Controller extends GetxController {
     if (curUser.login == newName) return;
 
     try {
-      // 1. Update User (username)
-      final updatedUser = await api.updateUser(
-        curUser.userId!,
-        {'username': newName},
-      );
+      // 后端统一改名入口（同时更新 user.username 与 author.name，扣除丁尼）
+      final resultName = await api.updateMyName(newName);
 
-      // 2. Update Author (name) if exists
-      final authorIdVal = authorId.value ?? curUser.authorId;
-      if (authorIdVal != null && authorIdVal.isNotEmpty) {
-        try {
-          await api.updateAuthor(
-            authorId: authorIdVal,
-            data: {'name': newName},
-          );
-        } catch (e) {
-          logger.w('Failed to update Author name', error: e);
-        }
-      }
-
-      // 3. Update local state
-      updatedUser.avatar = curUser.avatar;
-      user(updatedUser);
-      await ensureAuthorForUser(updatedUser);
+      curUser.name = resultName;
+      curUser.login = resultName;
+      user.refresh();
+      await refreshSelfUserInfo();
 
       showToast('用户名已更新');
     } catch (e) {

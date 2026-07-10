@@ -1,6 +1,7 @@
 import 'package:get/get.dart';
 import 'package:inter_knot/api/api.dart';
 import 'package:inter_knot/helpers/use.dart';
+import 'package:inter_knot/models/author.dart';
 import 'package:inter_knot/models/discussion.dart';
 
 class HDataModel {
@@ -47,6 +48,19 @@ class HDataModel {
   bool isPinned;
   bool isEditableDraft;
   bool hasPublishedVersion;
+  bool isAnonymous;
+  bool liked;
+  bool favorited;
+  int likesCount;
+  int commentsCount;
+  int favoritesCount;
+  int dennyCount;
+  bool hasGivenDenny;
+  bool isHidden;
+  String? title;
+  int? views;
+  AuthorModel? author;
+  PostCategory? category;
   bool get isPin => isPinned;
   String get url => '';
 
@@ -62,6 +76,19 @@ class HDataModel {
     required this.isPinned,
     this.isEditableDraft = false,
     this.hasPublishedVersion = false,
+    this.isAnonymous = false,
+    this.liked = false,
+    this.favorited = false,
+    this.likesCount = 0,
+    this.commentsCount = 0,
+    this.favoritesCount = 0,
+    this.dennyCount = 0,
+    this.hasGivenDenny = false,
+    this.isHidden = false,
+    this.title,
+    this.views,
+    this.author,
+    this.category,
   })  : updatedAt = updatedAt ?? _zeroDate,
         createdAt = createdAt ?? _zeroDate;
 
@@ -109,6 +136,20 @@ class HDataModel {
         json['id']?.toString() ??
         json['number']?.toString() ??
         '';
+    final categoryRaw = json['category'];
+    PostCategory? category;
+    if (categoryRaw is Map) {
+      final name = categoryRaw['name']?.toString() ?? '';
+      final slug = categoryRaw['slug']?.toString() ?? '';
+      if (name.isNotEmpty || slug.isNotEmpty) {
+        category = PostCategory(name: name, slug: slug);
+      }
+    }
+
+    final authorRaw = json['author'];
+    final author = authorRaw is Map<String, dynamic>
+        ? AuthorModel.fromJson(authorRaw)
+        : null;
 
     final updatedAt =
         (json['updatedAt'] as String?).use((v) => DateTime.parse(v));
@@ -123,6 +164,41 @@ class HDataModel {
       isPinned: false,
       isEditableDraft: isEditableDraft,
       hasPublishedVersion: json['hasPublishedVersion'] == true,
+      isAnonymous: json['isAnonymous'] == true,
+      liked: json['liked'] == true,
+      favorited: json['favorited'] == true,
+      likesCount: (json['likesCount'] ?? json['likescount']) is int
+          ? (json['likesCount'] ?? json['likescount']) as int
+          : int.tryParse(
+                (json['likesCount'] ?? json['likescount'] ?? 0).toString(),
+              ) ??
+              0,
+      commentsCount: (json['commentsCount'] ?? json['commentscount']) is int
+          ? (json['commentsCount'] ?? json['commentscount']) as int
+          : int.tryParse(
+                (json['commentsCount'] ?? json['commentscount'] ?? 0)
+                    .toString(),
+              ) ??
+              0,
+      favoritesCount: (json['favoritesCount'] ?? json['favoritescount']) is int
+          ? (json['favoritesCount'] ?? json['favoritescount']) as int
+          : int.tryParse(
+                (json['favoritesCount'] ?? json['favoritescount'] ?? 0)
+                    .toString(),
+              ) ??
+              0,
+      dennyCount: (json['dennyCount'] ?? json['dennycount']) is int
+          ? (json['dennyCount'] ?? json['dennycount']) as int
+          : int.tryParse(
+                (json['dennyCount'] ?? json['dennycount'] ?? 0).toString(),
+              ) ??
+              0,
+      hasGivenDenny: json['hasGivenDenny'] == true,
+      isHidden: json['isHidden'] == true,
+      title: json['title']?.toString(),
+      views: (json['views'] as num?)?.toInt(),
+      author: author,
+      category: category,
     );
   }
 
@@ -172,6 +248,48 @@ class HDataModel {
       createdAt: createdAt,
       isPinned: true,
       hasPublishedVersion: json['hasPublishedVersion'] == true,
+      isAnonymous: json['isAnonymous'] == true,
+      liked: json['liked'] == true,
+      favorited: json['favorited'] == true,
+      likesCount: (json['likesCount'] ?? json['likescount']) is int
+          ? (json['likesCount'] ?? json['likescount']) as int
+          : int.tryParse(
+                (json['likesCount'] ?? json['likescount'] ?? 0).toString(),
+              ) ??
+              0,
+      commentsCount: (json['commentsCount'] ?? json['commentscount']) is int
+          ? (json['commentsCount'] ?? json['commentscount']) as int
+          : int.tryParse(
+                (json['commentsCount'] ?? json['commentscount'] ?? 0)
+                    .toString(),
+              ) ??
+              0,
+      favoritesCount: (json['favoritesCount'] ?? json['favoritescount']) is int
+          ? (json['favoritesCount'] ?? json['favoritescount']) as int
+          : int.tryParse(
+                (json['favoritesCount'] ?? json['favoritescount'] ?? 0)
+                    .toString(),
+              ) ??
+              0,
+      dennyCount: (json['dennyCount'] ?? json['dennycount']) is int
+          ? (json['dennyCount'] ?? json['dennycount']) as int
+          : int.tryParse(
+                (json['dennyCount'] ?? json['dennycount'] ?? 0).toString(),
+              ) ??
+              0,
+      hasGivenDenny: json['hasGivenDenny'] == true,
+      isHidden: json['isHidden'] == true,
+      title: json['title']?.toString(),
+      views: (json['views'] as num?)?.toInt(),
+      author: json['author'] is Map<String, dynamic>
+          ? AuthorModel.fromJson(json['author'] as Map<String, dynamic>)
+          : null,
+      category: json['category'] is Map
+          ? PostCategory(
+              name: json['category']['name']?.toString() ?? '',
+              slug: json['category']['slug']?.toString() ?? '',
+            )
+          : null,
     );
   }
 
@@ -195,6 +313,23 @@ class HDataModel {
       'isPinned': isPinned,
       'isEditableDraft': isEditableDraft,
       'hasPublishedVersion': hasPublishedVersion,
+      'isAnonymous': isAnonymous,
+      'liked': liked,
+      'favorited': favorited,
+      'likesCount': likesCount,
+      'commentsCount': commentsCount,
+      'favoritesCount': favoritesCount,
+      'dennyCount': dennyCount,
+      'hasGivenDenny': hasGivenDenny,
+      'isHidden': isHidden,
+      if (title != null) 'title': title,
+      if (views != null) 'views': views,
+      if (author != null) 'author': author!.toJson(),
+      if (category != null)
+        'category': {
+          'name': category!.name,
+          'slug': category!.slug,
+        },
       // We might want to cache title/cover for offline display if available in valueCache
       if (_valueCache.containsKey(id)) ..._valueCache[id]!.toJson(),
     };
