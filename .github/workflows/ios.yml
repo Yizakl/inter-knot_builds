@@ -15,26 +15,14 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: 'any'
+          flutter-version: 'any' # 自动使用最新的最高稳定版本
           channel: 'stable'
           architecture: x64
 
       - name: Install Dependencies
         run: flutter pub get
 
-      - name: Setup Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: '3.0'
-
-      - name: Install Fastlane
-        run: |
-          cd ios
-          gem install bundler
-          bundle init
-          bundle add fastlane
-          
-      - name: Create Simple Build Script (instead of Fastlane)
+      - name: Create Simple Build Script
         run: |
           cat > ios/build_ipa.sh << 'EOF'
           #!/bin/bash
@@ -73,11 +61,6 @@ jobs:
           
           chmod +x ios/build_ipa.sh
 
-      - name: Install Bundler Dependencies (Optional)
-        run: |
-          cd ios
-          bundle install || echo "Bundler install failed but continuing..."
-          
       - name: Build iOS App
         id: build
         run: |
@@ -163,23 +146,24 @@ jobs:
             cd ios
             ./build_ipa.sh
           fi
-          
-      - name: Display Build Logs
-        if: always()
-        run: |
-          echo "Displaying Flutter build logs..."
-          if [ -f "flutter_build.log" ]; then
-            cat flutter_build.log
-          fi
-          
-          echo "Displaying any other logs..."
-          find . -name "*.log" 2>/dev/null
 
+      # ====== 新增：不管构建成功或失败，都将日志文件上传为 Artifact ======
+      - name: Upload Build Logs
+        if: always() # 确保报错时也会执行此步骤
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-build-logs
+          path: |
+            flutter_build.log
+            **/*.log
+          retention-days: 5
+
+      # ====== 仅在编译成功时，尝试上传安装包成果 ======
       - name: Upload iOS App
+        if: success() # 只有构建成功才上传，防止因找不到文件报错
         uses: actions/upload-artifact@v4
         with:
           name: app-release
-          # Use broader search paths to find any build artifacts
           path: |
             build/ios/iphoneos/Runner.app
             ios/Runner.ipa
