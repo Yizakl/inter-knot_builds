@@ -2,9 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:inter_knot/api/api.dart';
 import 'package:inter_knot/components/avatar.dart';
+import 'package:inter_knot/api/api_exception.dart';
 import 'package:inter_knot/components/discussions_grid.dart';
+import 'package:inter_knot/components/report_sheet.dart';
+import 'package:inter_knot/controllers/data.dart';
 import 'package:inter_knot/helpers/dialog_helper.dart';
+import 'package:inter_knot/helpers/toast.dart';
 import 'package:inter_knot/helpers/logger.dart';
+import 'package:inter_knot/helpers/share_helper.dart';
 import 'package:inter_knot/helpers/time_formatter.dart';
 import 'package:inter_knot/models/h_data.dart';
 import 'package:inter_knot/pages/discussion_page.dart';
@@ -24,6 +29,7 @@ class ProfilePage extends StatefulWidget {
 class _ProfilePageState extends State<ProfilePage>
     with SingleTickerProviderStateMixin {
   final _api = Get.find<Api>();
+  final _c = Get.find<Controller>();
   late TabController _tabController;
 
   Map<String, dynamic>? _profile;
@@ -38,6 +44,7 @@ class _ProfilePageState extends State<ProfilePage>
   bool _hasMoreComments = true;
   bool _isLoadingArticles = false;
   bool _isLoadingComments = false;
+  bool _isFollowingLoading = false;
 
   @override
   void initState() {
@@ -152,6 +159,56 @@ class _ProfilePageState extends State<ProfilePage>
     }
   }
 
+  Future<void> _toggleFollow() async {
+    if (_profile == null) return;
+    final isSelf = _profile!['isSelf'] == true;
+    if (isSelf) return;
+
+    if (!await _c.ensureLogin()) return;
+
+    final documentId = _profile!['documentId']?.toString() ?? '';
+    if (documentId.isEmpty) return;
+
+    setState(() => _isFollowingLoading = true);
+    try {
+      final result = await _api.toggleFollow(documentId);
+      if (mounted) {
+        setState(() {
+          _profile!['isFollowing'] = result.following;
+          _profile!['followersCount'] = result.followersCount;
+        });
+      }
+      showToast(result.following ? '已关注' : '已取消关注');
+    } catch (e) {
+      showToast(e is ApiException ? e.message : '关注操作失败', isError: true);
+    } finally {
+      if (mounted) setState(() => _isFollowingLoading = false);
+    }
+  }
+
+  Future<void> _shareProfile() async {
+    await ShareHelper.shareProfile(widget.authorDocumentId);
+  }
+
+  Future<void> _reportUser() async {
+    if (_profile == null) return;
+    final isSelf = _profile!['isSelf'] == true;
+    if (isSelf) return;
+
+    if (!await _c.ensureLogin()) return;
+
+    final userId = _profile!['userId']?.toString() ?? '';
+    if (userId.isEmpty) return;
+
+    if (mounted) {
+      await showReportSheet(
+        context,
+        targetType: 'user',
+        targetId: userId,
+      );
+    }
+  }
+
   Widget _buildProfileHeader() {
     if (_profile == null) return const SizedBox.shrink();
 
@@ -168,6 +225,11 @@ class _ProfilePageState extends State<ProfilePage>
     final totalViews = stats?['totalViews'] as int? ?? 0;
     final totalComments = stats?['totalComments'] as int? ?? 0;
     final totalLikes = stats?['totalLikes'] as int? ?? 0;
+    final followersCount = _profile!['followersCount'] as int? ?? 0;
+    final followingCount = _profile!['followingCount'] as int? ?? 0;
+    final isSelf = _profile!['isSelf'] == true;
+    final isFollowing = _profile!['isFollowing'] == true;
+    final isHidden = _profile!['isHidden'] == true;
 
     String bioText = '';
     if (bio != null && bio.isNotEmpty) {
@@ -272,8 +334,52 @@ class _ProfilePageState extends State<ProfilePage>
               _buildStatItem('浏览', totalViews),
               _buildStatItem('收到评论', totalComments),
               _buildStatItem('点赞', totalLikes),
+              _buildStatItem('关注', followingCount),
+              _buildStatItem('粉丝', followersCount),
             ],
           ),
+          if (!isSelf && !isHidden) ...[
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _isFollowingLoading ? null : _toggleFollow,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: isFollowing
+                          ? const Color(0xff2A2A2A)
+                          : const Color(0xffD7FF00),
+                      foregroundColor:
+                          isFollowing ? Colors.grey : Colors.black,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: _isFollowingLoading
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : Text(isFollowing ? '已关注' : '关注'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _reportUser,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.grey,
+                      side: const BorderSide(color: Color(0xff404040)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: const Text('举报'),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -670,6 +776,12 @@ class _ProfilePageState extends State<ProfilePage>
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Get.back(),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.share, color: Colors.white70),
+            onPressed: _shareProfile,
+          ),
+        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -882,6 +994,11 @@ class _ProfilePageState extends State<ProfilePage>
                 ],
               ),
             ),
+            IconButton(
+              icon: const Icon(Icons.share, color: Colors.grey),
+              onPressed: _shareProfile,
+            ),
+            const SizedBox(width: 4),
             IconButton(
               icon: const Icon(Icons.close, color: Colors.grey),
               onPressed: () => Get.back(),
