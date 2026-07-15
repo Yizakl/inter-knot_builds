@@ -8,48 +8,66 @@ on:
 
 jobs:
   build-ios:
+    name: Build unsigned iOS IPA
     runs-on: macos-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          cache: true
 
-      - name: Flutter pub get
+      - name: Flutter doctor
+        run: flutter doctor -v
+
+      - name: Get Flutter dependencies
         run: flutter pub get
 
-      - name: Build iOS unsigned app
+      - name: Prepare iOS project
         run: |
           flutter build ios \
             --release \
-            --no-codesign
+            --config-only
 
-      - name: Disable Xcode signing
+      - name: Install CocoaPods
+        working-directory: ios
         run: |
-          cd ios
+          pod install --repo-update
+
+      - name: Build unsigned archive
+        working-directory: ios
+        run: |
           xcodebuild \
             -workspace Runner.xcworkspace \
             -scheme Runner \
             -configuration Release \
             -sdk iphoneos \
+            -archivePath build/Runner.xcarchive \
+            archive \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM=""
+
+      - name: Extract unsigned app
+        run: |
+          mkdir -p Payload
+
+          cp -r \
+          ios/build/Runner.xcarchive/Products/Applications/Runner.app \
+          Payload/
 
       - name: Create unsigned IPA
         run: |
-          mkdir -p Payload
-          cp -r build/ios/iphoneos/Runner.app Payload/
+          zip -r \
+          Flutter-Unsigned.ipa \
+          Payload
 
-          zip -r Flutter-Unsigned.ipa Payload
-
-          rm -rf Payload
-
-      - name: Upload IPA
+      - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: Flutter-iOS-Unsigned-IPA
