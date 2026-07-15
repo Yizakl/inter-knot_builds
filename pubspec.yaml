@@ -10,7 +10,7 @@ environment:
 dependencies:
   cached_network_image: ^3.4.1
   dio: ^5.9.1
-  extended_text: ^14.2.2
+  extended_text: ^14.3.0
   flutter:
     sdk: flutter
   flutter_client_sse: ^2.0.3
@@ -18,7 +18,7 @@ dependencies:
   flutter_keyboard_visibility: ^6.0.0
   flutter_localizations:
     sdk: flutter
-  flutter_quill: ^11.5.0
+  flutter_quill: ^11.6.0
   flutter_quill_extensions: ^11.0.0
   flutter_widget_from_html: 0.15.3
   gal: ^2.3.2
@@ -75,5 +75,4 @@ flutter:
     - family: Roboto
       fonts:
         - asset: assets/fonts/Roboto-Regular.woff2
-
 
