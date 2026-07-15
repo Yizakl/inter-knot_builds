@@ -21,24 +21,18 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Flutter doctor
-        run: flutter doctor -v
+      - name: Flutter version
+        run: flutter --version
 
       - name: Get Flutter dependencies
         run: flutter pub get
 
-      - name: Prepare iOS project
-        run: |
-          flutter build ios \
-            --release \
-            --config-only
-
-      - name: Install CocoaPods
+      - name: Install CocoaPods dependencies
         working-directory: ios
         run: |
           pod install --repo-update
 
-      - name: Build unsigned archive
+      - name: Build unsigned iOS archive
         working-directory: ios
         run: |
           xcodebuild \
@@ -53,22 +47,21 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM=""
 
-      - name: Extract unsigned app
+      - name: Extract Runner.app
         run: |
           mkdir -p Payload
 
-          cp -r \
+          cp -R \
           ios/build/Runner.xcarchive/Products/Applications/Runner.app \
-          Payload/
+          Payload/Runner.app
 
       - name: Create unsigned IPA
         run: |
-          zip -r \
-          Flutter-Unsigned.ipa \
-          Payload
+          zip -r Flutter-Unsigned.ipa Payload
 
-      - name: Upload IPA artifact
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: Flutter-iOS-Unsigned-IPA
           path: Flutter-Unsigned.ipa
+          compression-level: 0
