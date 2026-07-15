@@ -22,6 +22,13 @@ jobs:
       - name: Install Dependencies
         run: flutter pub get
 
+      # ====== 关键步骤：因为你手动创建了 Podfile，这里直接安装原生 iOS 依赖 ======
+      - name: Install CocoaPods Dependencies
+        run: |
+          cd ios
+          pod repo update
+          pod install --repo-update
+
       - name: Create Simple Build Script
         run: |
           cat > ios/build_ipa.sh << 'EOF'
@@ -147,7 +154,7 @@ jobs:
             ./build_ipa.sh
           fi
 
-      # ====== 新增：不管构建成功或失败，都将日志文件上传为 Artifact ======
+      # ====== 不管构建成功或失败，都将日志文件上传为 Artifact ======
       - name: Upload Build Logs
         if: always() # 确保报错时也会执行此步骤
         uses: actions/upload-artifact@v4
@@ -158,9 +165,9 @@ jobs:
             **/*.log
           retention-days: 5
 
-      # ====== 仅在编译成功时，尝试上传安装包成果 ======
+      # ====== 仅在编译成功时，上传安装包成果 ======
       - name: Upload iOS App
-        if: success() # 只有构建成功才上传，防止因找不到文件报错
+        if: success() # 只有构建成功才上传
         uses: actions/upload-artifact@v4
         with:
           name: app-release
