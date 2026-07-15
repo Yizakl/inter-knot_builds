@@ -22,9 +22,13 @@ jobs:
       - name: Install Dependencies
         run: flutter pub get
 
-      # ====== 关键步骤：因为你手动创建了 Podfile，这里直接安装原生 iOS 依赖 ======
+      # ====== 关键修复：先配置生成底层依赖（如 podhelper.rb），再进行 pod install ======
       - name: Install CocoaPods Dependencies
         run: |
+          # 1. 自动生成包含 podhelper.rb 在内的全部 iOS 配置文件
+          flutter build ios --config-only
+          
+          # 2. 安全地执行 Pod 安装
           cd ios
           pod repo update
           pod install --repo-update
