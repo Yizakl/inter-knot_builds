@@ -22,10 +22,24 @@ jobs:
           cache: true
 
       - name: Flutter version
-        run: flutter --version
+        run: |
+          flutter --version
 
       - name: Get Flutter dependencies
-        run: flutter pub get
+        run: |
+          flutter pub get
+
+      - name: Fix iOS deployment target
+        run: |
+          if grep -q "^platform :" ios/Podfile; then
+            sed -i '' "s/^platform :.*/platform :ios, '13.0'/" ios/Podfile
+          else
+            printf "platform :ios, '13.0'\n\n" | cat - ios/Podfile > ios/Podfile.tmp
+            mv ios/Podfile.tmp ios/Podfile
+          fi
+
+          echo "Current Podfile:"
+          head -10 ios/Podfile
 
       - name: Install CocoaPods dependencies
         working-directory: ios
@@ -52,8 +66,8 @@ jobs:
           mkdir -p Payload
 
           cp -R \
-          ios/build/Runner.xcarchive/Products/Applications/Runner.app \
-          Payload/Runner.app
+            ios/build/Runner.xcarchive/Products/Applications/Runner.app \
+            Payload/Runner.app
 
       - name: Create unsigned IPA
         run: |
