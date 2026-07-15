@@ -18,7 +18,7 @@ dependencies:
   flutter_keyboard_visibility: ^6.0.0
   flutter_localizations:
     sdk: flutter
-  flutter_quill: ^11.6.0
+  flutter_quill: ^11.4.0
   flutter_quill_extensions: ^11.0.0
   flutter_widget_from_html: 0.15.3
   gal: ^2.3.2
